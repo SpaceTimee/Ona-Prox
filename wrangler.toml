@@ -3,6 +3,9 @@ name = "ona-prox"
 main = "src/index.ts"
 compatibility_date = "2023-05-18"
 compatibility_flags = ["nodejs_compat"]
+routes = [
+  { pattern = "prox.spacetimee.xyz", custom_domain = true }
+]
 
 # Workers Logs
 # Docs: https://developers.cloudflare.com/workers/observability/logs/workers-logs/

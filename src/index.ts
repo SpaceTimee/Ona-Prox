@@ -1,18 +1,22 @@
-/**
- * Welcome to Cloudflare Workers! This is your first worker.
- *
- * - Run `npm run dev` in your terminal to start a development server
- * - Open a browser tab at http://localhost:8787/ to see your worker in action
- * - Run `npm run deploy` to publish your worker
- *
- * Bind resources to your worker in `wrangler.toml`. After adding bindings, a type definition for the
- * `Env` object can be regenerated with `npm run cf-typegen`.
- *
- * Learn more at https://developers.cloudflare.com/workers/
- */
-
 export default {
-	async fetch(request, env, ctx): Promise<Response> {
-		return new Response('Hello World!');
-	},
-} satisfies ExportedHandler<Env>;
+  async fetch(request): Promise<Response> {
+    const url: URL = new URL(request.url)
+    const pathname: string = url.pathname
+    let hostname: string | undefined = pathname.split('/').filter(Boolean)[0]
+    let referer: string | null = request.headers.get('Referer')
+
+    if (!hostname?.startsWith('~')) {
+      hostname = '~i.pximg.net'
+      referer = 'https://pixiv.net'
+    }
+
+    url.pathname = pathname.replace(`/${hostname}`, '')
+    url.hostname = hostname.slice(1)
+
+    return fetch(new Request(url, request), {
+      headers: {
+        ...(referer && { Referer: referer })
+      }
+    })
+  }
+} satisfies ExportedHandler<Env>
