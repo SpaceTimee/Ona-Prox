@@ -1,19 +1,25 @@
+const BLOCKED_ORIGINS = new Set([
+  'http://blacked.com',
+])
+
+function setCorsHeaders(headers: Headers, origin: string | null) {
+  if (origin && !BLOCKED_ORIGINS.has(origin)) {
+    headers.set('Access-Control-Allow-Origin', origin)
+    headers.set('Access-Control-Allow-Credentials', 'true')
+  }
+  headers.set('Vary', 'Origin')
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const origin = request.headers.get('Origin')
     if (request.method === 'OPTIONS') {
       const headers = new Headers()
-      if (origin) {
-        headers.set('Access-Control-Allow-Origin', origin)
-        headers.set('Access-Control-Allow-Credentials', 'true')
-      } else {
-        headers.set('Access-Control-Allow-Origin', '*')
-      }
+      setCorsHeaders(headers, origin)
       headers.set('Access-Control-Allow-Methods', 'GET,HEAD,POST,OPTIONS')
       const reqHeaders = request.headers.get('Access-Control-Request-Headers')
       if (reqHeaders) headers.set('Access-Control-Allow-Headers', reqHeaders)
       headers.set('Access-Control-Max-Age', '86400')
-      headers.set('Vary', 'Origin')
       return new Response(null, { status: 204, headers })
     }
 
@@ -36,14 +42,8 @@ export default {
       }
     })
     const headers = new Headers(res.headers)
-    if (origin) {
-      headers.set('Access-Control-Allow-Origin', origin)
-      headers.set('Access-Control-Allow-Credentials', 'true')
-    } else {
-      headers.set('Access-Control-Allow-Origin', '*')
-    }
+    setCorsHeaders(headers, origin)
     headers.set('Access-Control-Expose-Headers', 'Content-Length,Content-Type,Cache-Control,ETag,Accept-Ranges')
-    headers.set('Vary', 'Origin')
     return new Response(res.body, { status: res.status, headers })
   }
 } satisfies ExportedHandler<Env>
