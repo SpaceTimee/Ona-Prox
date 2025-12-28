@@ -1,0 +1,44 @@
+# Dependencies
+node_modules
+
+# Build outputs
+dist
+build
+
+# Wrangler
+.wrangler
+.dev.vars
+
+# Lock files
+pnpm-lock.yaml
+package-lock.json
+yarn.lock
+
+# Generated files
+worker-configuration.d.ts
+*.tsbuildinfo
+
+# Coverage
+coverage
+.nyc_output
+
+# Cache
+.cache
+.parcel-cache
+.eslintcache
+
+# Logs
+*.log
+logs
+
+# IDE
+.vscode
+.idea
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Misc
+*.min.js
+*.min.css
