@@ -1,7 +1,7 @@
 #:schema node_modules/wrangler/config-schema.json
 name = "ona-prox"
 main = "src/index.ts"
-compatibility_date = "2024-10-01"
+compatibility_date = "2025-12-01"
 compatibility_flags = ["nodejs_compat"]
 
 route = { pattern = "prox.spacetimee.xyz", custom_domain = true }

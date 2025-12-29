@@ -1,49 +1,23 @@
-const BLOCKED_ORIGINS = new Set([
-  'http://blacked.com',
-])
+import { Hono, type Context } from 'hono'
+import { cors } from 'hono/cors'
+import { logger } from 'hono/logger'
+import { secureHeaders } from 'hono/secure-headers'
 
-function setCorsHeaders(headers: Headers, origin: string | null) {
-  if (origin && !BLOCKED_ORIGINS.has(origin)) {
-    headers.set('Access-Control-Allow-Origin', origin)
-    headers.set('Access-Control-Allow-Credentials', 'true')
-  }
-  headers.set('Vary', 'Origin')
+const proxy = async (context: Context, hostname: string, path: string) => {
+  const headers = new Headers(context.req.raw.headers)
+  if (hostname === 'i.pximg.net') headers.set('Referer', 'https://pixiv.net')
+  const response = await fetch(new URL(path, `https://${hostname}`), {
+    method: context.req.method,
+    headers,
+    body: context.req.raw.body
+  })
+  return new Response(response.body, response)
 }
 
-export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const origin = request.headers.get('Origin')
-    if (request.method === 'OPTIONS') {
-      const headers = new Headers()
-      setCorsHeaders(headers, origin)
-      headers.set('Access-Control-Allow-Methods', 'GET,HEAD,POST,OPTIONS')
-      const reqHeaders = request.headers.get('Access-Control-Request-Headers')
-      if (reqHeaders) headers.set('Access-Control-Allow-Headers', reqHeaders)
-      headers.set('Access-Control-Max-Age', '86400')
-      return new Response(null, { status: 204, headers })
-    }
-
-    const url: URL = new URL(request.url)
-    const pathname: string = url.pathname
-    let hostname: string | undefined = pathname.split('/').filter(Boolean)[0]
-    let referer: string | null = request.headers.get('Referer')
-
-    if (!hostname?.startsWith('~')) {
-      hostname = '~i.pximg.net'
-      referer = 'https://pixiv.net'
-    }
-
-    url.pathname = pathname.replace(`/${hostname}`, '')
-    url.hostname = hostname.slice(1)
-
-    const res = await fetch(new Request(url, request), {
-      headers: {
-        ...(referer && { Referer: referer })
-      }
-    })
-    const headers = new Headers(res.headers)
-    setCorsHeaders(headers, origin)
-    headers.set('Access-Control-Expose-Headers', 'Content-Length,Content-Type,Cache-Control,ETag,Accept-Ranges')
-    return new Response(res.body, { status: res.status, headers })
-  }
-} satisfies ExportedHandler<Env>
+export default new Hono<{ Bindings: Env }>()
+  .use('*', logger(), secureHeaders(), cors())
+  .onError((_, context) => context.text('Internal Server Error', 500))
+  .all('/:target{^~.+}/:path*', (context) =>
+    proxy(context, context.req.param('target').slice(1), '/' + (context.req.param('path') || ''))
+  )
+  .all('*', (context) => proxy(context, 'i.pximg.net', context.req.path))
