@@ -1,22 +1,24 @@
-export default {
-  async fetch(request): Promise<Response> {
-    const url: URL = new URL(request.url)
-    const pathname: string = url.pathname
-    let hostname: string | undefined = pathname.split('/').filter(Boolean)[0]
-    let referer: string | null = request.headers.get('Referer')
+import { Hono, type Context } from 'hono'
+import { cors } from 'hono/cors'
+import { logger } from 'hono/logger'
+import { secureHeaders } from 'hono/secure-headers'
 
-    if (!hostname?.startsWith('~')) {
-      hostname = '~i.pximg.net'
-      referer = 'https://pixiv.net'
-    }
+const proxy = async (context: Context, hostname: string, path: string) => {
+  const headers = new Headers(context.req.raw.headers)
+  headers.delete('Host')
+  if (hostname === 'i.pximg.net') headers.set('Referer', 'https://pixiv.net')
+  const response = await fetch(new URL(path, `https://${hostname}`), {
+    method: context.req.method,
+    headers,
+    body: context.req.raw.body
+  })
+  return new Response(response.body, response)
+}
 
-    url.pathname = pathname.replace(`/${hostname}`, '')
-    url.hostname = hostname.slice(1)
-
-    return fetch(new Request(url, request), {
-      headers: {
-        ...(referer && { Referer: referer })
-      }
-    })
-  }
-} satisfies ExportedHandler<Env>
+export default new Hono<{ Bindings: Env }>()
+  .use('*', logger(), secureHeaders(), cors())
+  .onError((_, context) => context.text('Internal Server Error', 500))
+  .all('/:target{~[^/]+}/:path{.*}', (context) =>
+    proxy(context, context.req.param('target').slice(1), '/' + (context.req.param('path') || ''))
+  )
+  .all('*', (context) => proxy(context, 'i.pximg.net', context.req.path))
