@@ -20,7 +20,7 @@ const proxy = async (context: Context, protocol: string, host: string, pathname:
 }
 
 export default new Hono<{ Bindings: Env }>()
-  .use('*', logger(), secureHeaders(), cors())
+  .use('*', logger(), secureHeaders({ crossOriginResourcePolicy: 'cross-origin' }), cors())
   .onError((_, context) => context.text('Internal Server Error', 500))
   .all('/:prefix{(?:[~-][^/]*|https?)}/:rest{.*}', (context) => {
     const { prefix, rest } = context.req.param()
