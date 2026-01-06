@@ -1,7 +1,7 @@
 #:schema node_modules/wrangler/config-schema.json
 name = "ona-prox"
 main = "src/index.ts"
-compatibility_date = "2025-12-01"
+compatibility_date = "2026-01-01"
 compatibility_flags = ["nodejs_compat"]
 
 route = { pattern = "prox.spacetimee.xyz", custom_domain = true }
@@ -17,3 +17,41 @@ invocation_logs = true
 enabled = true
 head_sampling_rate = 1
 persist = true
+
+[vars]
+# ===== Core Settings =====
+PARAM_NAME = "url"              # [string] Query param name for param proxy
+FALLBACK_HOST = ""              # [string] Fallback host (default: i.pximg.net)
+DEFAULT_HTTP = ""               # [flag] Use HTTP instead of HTTPS
+
+# ===== Feature Toggles =====
+DISABLE_PATH_PROXY = ""         # [flag] Disable path proxy (/https/...)
+DISABLE_PARAM_PROXY = ""        # [flag] Disable param proxy (?url=...)
+DISABLE_FALLBACK_PROXY = ""     # [flag] Disable fallback proxy (FALLBACK_HOST)
+DISABLE_PARAM_MERGE = ""        # [flag] Disable auto-merge query params
+
+# ===== URL Format Toggles =====
+DISABLE_FULL_PROTOCOL = ""      # [flag] Disable https:// and http://
+DISABLE_SEGMENTED_PROTOCOL = "" # [flag] Disable https/ and http/
+DISABLE_SLASH_SHORTHAND = ""    # [flag] Disable ~/ and -/
+DISABLE_COMPACT_SHORTHAND = ""  # [flag] Disable ~ and -
+DISABLE_IMPLICIT_PROTOCOL = ""  # [flag] Disable // and bare domain
+
+# ===== Header Control =====
+DISABLE_REFERER_SPOOF = ""      # [flag] Disable Referer spoofing
+REQUEST_HEADERS = ""            # [object] Request headers: "Key: value", "-Key", "Key"
+RESPONSE_HEADERS = ""           # [object] Response headers: same syntax
+
+# ===== Access Control =====
+ALLOWED_HOSTS = ""              # [list] Target host whitelist
+BLOCKED_HOSTS = ""              # [list] Target host blacklist
+ALLOWED_METHODS = ""            # [list] Method whitelist (e.g. GET,HEAD)
+BLOCKED_METHODS = ""            # [list] Method blacklist (e.g. POST,PUT)
+ALLOWED_IPS = ""                # [list] Client IP whitelist
+BLOCKED_IPS = ""                # [list] Client IP blacklist
+ALLOWED_ORIGINS = ""            # [list] CORS origin whitelist
+BLOCKED_ORIGINS = ""            # [list] CORS origin blacklist
+
+# ===== Logging & Debug =====
+DISABLE_LOGGER = ""             # [flag] Disable request logging
+DISABLE_REDIRECT = ""           # [flag] Disable redirect following
