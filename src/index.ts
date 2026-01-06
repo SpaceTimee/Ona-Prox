@@ -275,5 +275,15 @@ export default new Hono<{ Bindings: Env }>()
       }
     }
 
+    if (path === '/') {
+      const target = (env.ROOT_PAGE as string) || (env.FALLBACK_HOST as string) || 'i.pximg.net'
+      const parsed = parseTarget(target, env, true)
+      if (parsed) return proxy(c, env, parsed.protocol, parsed.host, parsed.pathname, parsed.search)
+    }
+
+    if (env.ERROR_PAGE) {
+      const parsed = parseTarget(env.ERROR_PAGE as string, env, true)
+      if (parsed) return proxy(c, env, parsed.protocol, parsed.host, parsed.pathname, parsed.search)
+    }
     return c.text('Not Found', 404)
   })

@@ -22,6 +22,8 @@ persist = true
 # ===== Core Settings =====
 PARAM_NAME = "url"              # [string] Query param name for param proxy
 FALLBACK_HOST = ""              # [string] Fallback host (default: i.pximg.net)
+ROOT_PAGE = ""                  # [string] Root path redirect URL (empty: FALLBACK_HOST)
+ERROR_PAGE = ""                 # [string] 404 page URL (empty: return 404)
 DEFAULT_HTTP = ""               # [flag] Use HTTP instead of HTTPS
 
 # ===== Feature Toggles =====
