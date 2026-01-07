@@ -68,11 +68,15 @@ const isAllowed = (value: string, allowedList: string, blockedList: string): boo
   )
 }
 
-const isHostAllowed = (host: string, env: Env) =>
-  isAllowed(host, env.ALLOWED_HOSTS as string, env.BLOCKED_HOSTS as string)
-
-const isMethodAllowed = (method: string, env: Env) =>
-  isAllowed(method, env.ALLOWED_METHODS as string, env.BLOCKED_METHODS as string)
+const isLoopTarget = (host: string, env: Env): boolean => {
+  const target = host.toLowerCase()
+  const deployDomain = (env.DEPLOY_DOMAIN as string).toLowerCase()
+  const subdomainBase = (env.SUBDOMAIN_BASE as string).toLowerCase() || deployDomain
+  return Boolean(
+    deployDomain &&
+    (target === deployDomain || target === subdomainBase || target.endsWith('.' + subdomainBase))
+  )
+}
 
 /** Apply header rules: "Key: value", "-Key", "Key" */
 const applyCustomHeaders = (headers: Headers, config: string) => {
@@ -112,10 +116,11 @@ const proxy = async (
       env.ALLOWED_IPS as string,
       env.BLOCKED_IPS as string
     ) ||
-    !isHostAllowed(host, env)
+    !isAllowed(host, env.ALLOWED_HOSTS as string, env.BLOCKED_HOSTS as string)
   )
     return c.text('Forbidden', 403)
-  if (!isMethodAllowed(c.req.method, env)) return c.text('Method Not Allowed', 405)
+  if (!isAllowed(c.req.method, env.ALLOWED_METHODS as string, env.BLOCKED_METHODS as string))
+    return c.text('Method Not Allowed', 405)
 
   const reqHeaders = new Headers(c.req.raw.headers)
   reqHeaders.delete('Host')
@@ -246,14 +251,16 @@ export default new Hono<{ Bindings: Env }>()
   .all('*', (c) => {
     const { env } = c
     const { hostname, pathname, search, searchParams } = new URL(c.req.url)
-
-    if (!env.DISABLE_SUBDOMAIN_PROXY && env.PROXY_DOMAIN) {
-      const suffix = '.' + (env.PROXY_DOMAIN as string).toLowerCase()
+    const deployDomain = (env.DEPLOY_DOMAIN as string).toLowerCase()
+    if (!env.DISABLE_SUBDOMAIN_PROXY && deployDomain && hostname.toLowerCase() !== deployDomain) {
+      const suffix = '.' + ((env.SUBDOMAIN_BASE as string).toLowerCase() || deployDomain)
       if (hostname.toLowerCase().endsWith(suffix)) {
         const subdomain = hostname.slice(0, -suffix.length)
         const separator = (env.SUBDOMAIN_SEPARATOR as string) || '.'
         const targetHost = separator === '.' ? subdomain : subdomain.split(separator).join('.')
-        return proxy(c, env, env.DEFAULT_HTTP ? 'http' : 'https', targetHost, pathname, search)
+        if (!isLoopTarget(targetHost, env)) {
+          return proxy(c, env, env.DEFAULT_HTTP ? 'http' : 'https', targetHost, pathname, search)
+        }
       }
     }
 
@@ -261,13 +268,15 @@ export default new Hono<{ Bindings: Env }>()
       const match = pathname.match(/^\/([~-][^/]*|https?)\/(.*)$/i)
       if (match) {
         const parsed = parseTarget(`${match[1]}/${match[2]}`, env, true)
-        if (parsed) return proxy(c, env, parsed.protocol, parsed.host, parsed.pathname)
+        if (parsed && !isLoopTarget(parsed.host, env))
+          return proxy(c, env, parsed.protocol, parsed.host, parsed.pathname)
       }
     }
 
     if (pathname.length > 1) {
       const parsed = parseTarget(pathname.slice(1), env)
-      if (parsed) return proxy(c, env, parsed.protocol, parsed.host, parsed.pathname)
+      if (parsed && !isLoopTarget(parsed.host, env))
+        return proxy(c, env, parsed.protocol, parsed.host, parsed.pathname)
     }
 
     if (!env.DISABLE_PARAM_PROXY) {
@@ -280,7 +289,8 @@ export default new Hono<{ Bindings: Env }>()
           if (rest) target += (targetUrl.includes('?') ? '&' : '?') + rest
         }
         const parsed = parseTarget(target, env)
-        if (parsed) return proxy(c, env, parsed.protocol, parsed.host, parsed.pathname, parsed.search)
+        if (parsed && !isLoopTarget(parsed.host, env))
+          return proxy(c, env, parsed.protocol, parsed.host, parsed.pathname, parsed.search)
       }
     }
 
