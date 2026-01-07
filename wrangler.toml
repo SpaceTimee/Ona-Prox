@@ -4,7 +4,10 @@ main = "src/index.ts"
 compatibility_date = "2026-01-01"
 compatibility_flags = ["nodejs_compat"]
 
-route = { pattern = "prox.spacetimee.xyz", custom_domain = true }
+routes = [
+  { pattern = "prox.spacetimee.xyz", custom_domain = true },
+  { pattern = "*.prox.spacetimee.xyz/*", zone_name = "spacetimee.xyz" }
+]
 
 [observability]
 [observability.logs]
@@ -20,6 +23,8 @@ persist = true
 
 [vars]
 # ===== Core Settings =====
+PROXY_DOMAIN = ""               # [string] Base domain for subdomain proxy (empty: disabled)
+SUBDOMAIN_SEPARATOR = ""        # [string] Domain separator in subdomain (empty: ".", e.g. "-")
 PARAM_NAME = "url"              # [string] Query param name for param proxy
 FALLBACK_HOST = ""              # [string] Fallback host (default: i.pximg.net)
 ROOT_PAGE = ""                  # [string] Root path redirect URL (empty: FALLBACK_HOST)
@@ -27,6 +32,7 @@ ERROR_PAGE = ""                 # [string] 404 page URL (empty: return 404)
 DEFAULT_HTTP = ""               # [flag] Use HTTP instead of HTTPS
 
 # ===== Feature Toggles =====
+DISABLE_SUBDOMAIN_PROXY = ""    # [flag] Disable subdomain proxy
 DISABLE_PATH_PROXY = ""         # [flag] Disable path proxy (/https/...)
 DISABLE_PARAM_PROXY = ""        # [flag] Disable param proxy (?url=...)
 DISABLE_FALLBACK_PROXY = ""     # [flag] Disable fallback proxy (FALLBACK_HOST)
@@ -47,8 +53,8 @@ RESPONSE_HEADERS = ""           # [object] Response headers: same syntax
 # ===== Access Control =====
 ALLOWED_HOSTS = ""              # [list] Target host whitelist
 BLOCKED_HOSTS = ""              # [list] Target host blacklist
-ALLOWED_METHODS = ""            # [list] Method whitelist (e.g. GET,HEAD)
-BLOCKED_METHODS = ""            # [list] Method blacklist (e.g. POST,PUT)
+ALLOWED_METHODS = ""            # [list] Method whitelist (e.g. GET, HEAD)
+BLOCKED_METHODS = ""            # [list] Method blacklist (e.g. POST, PUT)
 ALLOWED_IPS = ""                # [list] Client IP whitelist
 BLOCKED_IPS = ""                # [list] Client IP blacklist
 ALLOWED_ORIGINS = ""            # [list] CORS origin whitelist

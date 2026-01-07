@@ -244,38 +244,47 @@ export default new Hono<{ Bindings: Env }>()
   )
   .onError((_, c) => c.text('Internal Server Error', 500))
   .all('*', (c) => {
-    const { path } = c.req
     const { env } = c
+    const { hostname, pathname, search, searchParams } = new URL(c.req.url)
+
+    if (!env.DISABLE_SUBDOMAIN_PROXY && env.PROXY_DOMAIN) {
+      const suffix = '.' + (env.PROXY_DOMAIN as string).toLowerCase()
+      if (hostname.toLowerCase().endsWith(suffix)) {
+        const subdomain = hostname.slice(0, -suffix.length)
+        const separator = (env.SUBDOMAIN_SEPARATOR as string) || '.'
+        const targetHost = separator === '.' ? subdomain : subdomain.split(separator).join('.')
+        return proxy(c, env, env.DEFAULT_HTTP ? 'http' : 'https', targetHost, pathname, search)
+      }
+    }
 
     if (!env.DISABLE_PATH_PROXY) {
-      const match = path.match(/^\/([~-][^/]*|https?)\/(.*)$/i)
+      const match = pathname.match(/^\/([~-][^/]*|https?)\/(.*)$/i)
       if (match) {
         const parsed = parseTarget(`${match[1]}/${match[2]}`, env, true)
         if (parsed) return proxy(c, env, parsed.protocol, parsed.host, parsed.pathname)
       }
     }
 
-    if (path.length > 1) {
-      const parsed = parseTarget(path.slice(1), env)
+    if (pathname.length > 1) {
+      const parsed = parseTarget(pathname.slice(1), env)
       if (parsed) return proxy(c, env, parsed.protocol, parsed.host, parsed.pathname)
     }
 
     if (!env.DISABLE_PARAM_PROXY) {
-      const url = new URL(c.req.url)
-      const targetUrl = url.searchParams.get(env.PARAM_NAME)
+      const targetUrl = searchParams.get(env.PARAM_NAME)
       if (targetUrl) {
-        let fullUrl = targetUrl
+        let target = targetUrl
         if (!env.DISABLE_PARAM_MERGE) {
-          url.searchParams.delete(env.PARAM_NAME)
-          const rest = url.searchParams.toString()
-          if (rest) fullUrl += (targetUrl.includes('?') ? '&' : '?') + rest
+          searchParams.delete(env.PARAM_NAME)
+          const rest = searchParams.toString()
+          if (rest) target += (targetUrl.includes('?') ? '&' : '?') + rest
         }
-        const parsed = parseTarget(fullUrl, env)
+        const parsed = parseTarget(target, env)
         if (parsed) return proxy(c, env, parsed.protocol, parsed.host, parsed.pathname, parsed.search)
       }
     }
 
-    if (path === '/') {
+    if (pathname === '/') {
       const target = (env.ROOT_PAGE as string) || (env.FALLBACK_HOST as string) || 'i.pximg.net'
       const parsed = parseTarget(target, env, true)
       if (parsed) return proxy(c, env, parsed.protocol, parsed.host, parsed.pathname, parsed.search)
