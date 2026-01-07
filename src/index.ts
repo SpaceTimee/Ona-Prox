@@ -1,4 +1,5 @@
 import { Hono, type Context } from 'hono'
+import type { StatusCode } from 'hono/utils/http-status'
 import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
 import { secureHeaders } from 'hono/secure-headers'
@@ -140,7 +141,7 @@ const proxy = async (
   const resHeaders = new Headers(res.headers)
   applyCustomHeaders(resHeaders, env.RESPONSE_HEADERS as string)
 
-  return new Response(res.body, { status: res.status, statusText: res.statusText, headers: resHeaders })
+  return c.newResponse(res.body, res.status as StatusCode, Object.fromEntries(resHeaders))
 }
 
 const parseTarget = (target: string, env: Env, skipFallback = false): ParsedTarget | null => {
