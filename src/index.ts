@@ -1,49 +1,44 @@
-import { Hono, type Context } from 'hono'
-import type { StatusCode } from 'hono/utils/http-status'
+import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
 import { secureHeaders } from 'hono/secure-headers'
+import type { StatusCode } from 'hono/utils/http-status'
 
 type ParsedTarget = { protocol: string; host: string; pathname: string; search: string }
 
-/** Parse "host/path" into { host, pathname } */
-const extractHostPath = (input: string): { host: string; pathname: string } => {
-  const slashIdx = input.indexOf('/')
-  return {
-    host: slashIdx === -1 ? input : input.slice(0, slashIdx),
-    pathname: slashIdx === -1 ? '/' : input.slice(slashIdx) || '/'
-  }
-}
+const WILDCARD_ESCAPES = ['\uE000', '\uE001', '\uE002', '\uE003']
+const HEADER_ESCAPES = ['\uE000', '\uE001']
 
-/** Check whitelist/blacklist (case-insensitive, supports * + ? wildcards, escape with \) */
 const isAllowed = (value: string, allowedList: string, blockedList: string): boolean => {
-  const ESC = ['\uE000', '\uE001', '\uE002', '\uE003']
-  const matches = (v: string, pattern: string): boolean => {
-    const p = pattern
+  const toRules = (list: string) =>
+    list
+      .split(',')
+      .map((rule) => rule.trim())
+      .filter(Boolean)
+  const matches = (pattern: string): boolean => {
+    const escaped = pattern
       .split('\\\\')
-      .join(ESC[0])
+      .join(WILDCARD_ESCAPES[0])
       .split('\\*')
-      .join(ESC[1])
+      .join(WILDCARD_ESCAPES[1])
       .split('\\+')
-      .join(ESC[2])
+      .join(WILDCARD_ESCAPES[2])
       .split('\\?')
-      .join(ESC[3])
-    if (!/[*+?]/.test(p)) {
-      return (
-        v.toLowerCase() ===
-        p
-          .split(ESC[0])
-          .join('\\')
-          .split(ESC[1])
-          .join('*')
-          .split(ESC[2])
-          .join('+')
-          .split(ESC[3])
-          .join('?')
-          .toLowerCase()
-      )
+      .join(WILDCARD_ESCAPES[3])
+    if (!/[*+?]/.test(escaped)) {
+      const normalized = escaped
+        .split(WILDCARD_ESCAPES[0])
+        .join('\\')
+        .split(WILDCARD_ESCAPES[1])
+        .join('*')
+        .split(WILDCARD_ESCAPES[2])
+        .join('+')
+        .split(WILDCARD_ESCAPES[3])
+        .join('?')
+        .toLowerCase()
+      return value.toLowerCase() === normalized
     }
-    const regex = p
+    const regex = escaped
       .replace(/[.^${}()|[\]\\]/g, '\\$&')
       .split('*')
       .join('.*')
@@ -51,111 +46,77 @@ const isAllowed = (value: string, allowedList: string, blockedList: string): boo
       .join('.+')
       .split('?')
       .join('.')
-      .split(ESC[0])
+      .split(WILDCARD_ESCAPES[0])
       .join('\\\\')
-      .split(ESC[1])
+      .split(WILDCARD_ESCAPES[1])
       .join('\\*')
-      .split(ESC[2])
+      .split(WILDCARD_ESCAPES[2])
       .join('\\+')
-      .split(ESC[3])
+      .split(WILDCARD_ESCAPES[3])
       .join('\\?')
-    return new RegExp(`^${regex}$`, 'i').test(v)
+    return new RegExp(`^${regex}$`, 'i').test(value)
   }
-  const allowed = allowedList ? allowedList.split(',').map((p) => p.trim()) : null
-  const blocked = blockedList ? blockedList.split(',').map((p) => p.trim()) : null
-  return (
-    (!allowed || allowed.some((p) => matches(value, p))) &&
-    !(blocked && blocked.some((p) => matches(value, p)))
-  )
+  const allowed = allowedList ? toRules(allowedList) : []
+  const blocked = blockedList ? toRules(blockedList) : []
+  if (allowed.length === 0 && blocked.length === 0) return true
+  return (allowed.length === 0 || allowed.some(matches)) && !blocked.some(matches)
 }
 
-const isLoopTarget = (host: string, env: Env): boolean => {
-  const target = host.toLowerCase()
-  const deployDomain = (env.DEPLOY_DOMAIN as string).toLowerCase()
-  const subdomainBase = (env.SUBDOMAIN_BASE as string).toLowerCase() || deployDomain
-  return Boolean(
-    deployDomain &&
-    (target === deployDomain || target === subdomainBase || target.endsWith('.' + subdomainBase))
-  )
-}
-
-/** Apply header rules: "Key: value", "-Key", "Key" */
-const applyCustomHeaders = (headers: Headers, config: string) => {
-  if (!config) return
-  const ESC = ['\uE000', '\uE001']
-  const items = config
+const applyHeaders = (headers: Headers, rules: string) => {
+  if (!rules || !rules.trim()) return
+  for (const entry of rules
     .split('\\\\')
-    .join(ESC[0])
+    .join(HEADER_ESCAPES[0])
     .split('\\,')
-    .join(ESC[1])
+    .join(HEADER_ESCAPES[1])
     .split(',')
-    .map((s) => s.split(ESC[0]).join('\\\\').split(ESC[1]).join(',').trim())
-  for (const item of items) {
-    if (!item) continue
-    if (item.startsWith('-')) {
-      headers.delete(item.slice(1).trim())
-    } else {
-      const colonIdx = item.indexOf(':')
-      const key = colonIdx === -1 ? item : item.slice(0, colonIdx).trim()
-      const value = (colonIdx === -1 ? '' : item.slice(colonIdx + 1).trim()).split('\\\\').join('\\')
-      headers.set(key, value)
+    .map((s) => s.split(HEADER_ESCAPES[0]).join('\\\\').split(HEADER_ESCAPES[1]).join(',').trim())
+    .filter(Boolean)) {
+    if (entry.startsWith('-')) {
+      headers.delete(entry.slice(1).trim())
+      continue
     }
+    const colonIndex = entry.indexOf(':')
+    headers.set(
+      colonIndex === -1 ? entry : entry.slice(0, colonIndex).trim(),
+      (colonIndex === -1 ? '' : entry.slice(colonIndex + 1).trim()).split('\\\\').join('\\')
+    )
   }
 }
 
-const proxy = async (
-  c: Context,
-  env: Env,
-  protocol: string,
-  host: string,
-  pathname: string,
-  search?: string
-) => {
-  if (
-    !isAllowed(
-      c.req.header('CF-Connecting-IP') || '',
-      env.ALLOWED_IPS as string,
-      env.BLOCKED_IPS as string
-    ) ||
-    !isAllowed(host, env.ALLOWED_HOSTS as string, env.BLOCKED_HOSTS as string)
-  )
-    return c.text('Forbidden', 403)
-  if (!isAllowed(c.req.method, env.ALLOWED_METHODS as string, env.BLOCKED_METHODS as string))
-    return c.text('Method Not Allowed', 405)
-
-  const reqHeaders = new Headers(c.req.raw.headers)
-  reqHeaders.delete('Host')
-  if (!env.DISABLE_REFERER_SPOOF) reqHeaders.set('Referer', `${protocol}://${host}/`)
-  applyCustomHeaders(reqHeaders, env.REQUEST_HEADERS as string)
-
-  const url = Object.assign(new URL(c.req.url), { protocol, host, pathname })
-  if (search !== undefined) url.search = search
-
-  const res = await fetch(url, {
-    method: c.req.method,
-    headers: reqHeaders,
-    body: c.req.raw.body,
-    redirect: env.DISABLE_REDIRECT ? 'manual' : 'follow'
-  })
-
-  const resHeaders = new Headers(res.headers)
-  applyCustomHeaders(resHeaders, env.RESPONSE_HEADERS as string)
-
-  return c.newResponse(res.body, res.status as StatusCode, Object.fromEntries(resHeaders))
+const parseHostPath = (value: string) => {
+  const queryIndex = value.indexOf('?')
+  const path = queryIndex === -1 ? value : value.slice(0, queryIndex)
+  const slashIndex = path.indexOf('/')
+  return {
+    host: slashIndex === -1 ? path : path.slice(0, slashIndex),
+    pathname: slashIndex === -1 ? '/' : path.slice(slashIndex) || '/',
+    search: queryIndex === -1 ? '' : value.slice(queryIndex)
+  }
 }
 
-const parseTarget = (target: string, env: Env, skipFallback = false): ParsedTarget | null => {
-  const defaultProtocol = env.DEFAULT_HTTP ? 'http' : 'https'
-  const normalized = target
-    .trim()
-    .replace(/^(https?):\/+/i, '$1://')
-    .replace(/^\/{3,}/, '//')
-    .replace(/^(https?|[~-])\/+/i, '$1/')
-    .replace(/(?<!^)\/{2,}/g, '/')
+const parseTarget = (
+  target: string,
+  env: Env,
+  defaultProtocol: 'http' | 'https',
+  fallbackHost: string,
+  skipFallback = false
+): ParsedTarget | null => {
+  let input = target.trim()
 
-  if (!env.DISABLE_FULL_PROTOCOL && /^https?:\/\//i.test(normalized)) {
+  let slashIndex = input.indexOf('/')
+  if (slashIndex === -1) {
+    if (/^(https?:|[~-])/i.test(input)) input = input.replace(/^(https?:|[~-])/i, '$1/')
+    else input = '/' + input
+    slashIndex = input.indexOf('/')
+  }
+
+  const prefix = input.slice(0, slashIndex).toLowerCase()
+  const rest = input.slice(slashIndex + 1).replace(/^\/+/, '')
+
+  if (!env.DISABLE_FULL_PROTOCOL && (prefix === 'https:' || prefix === 'http:')) {
     try {
-      const url = new URL(normalized)
+      const url = new URL(prefix + '//' + rest)
       return {
         protocol: url.protocol.slice(0, -1),
         host: url.host,
@@ -163,147 +124,153 @@ const parseTarget = (target: string, env: Env, skipFallback = false): ParsedTarg
         search: url.search
       }
     } catch {
-      /* fall through */
+      /* invalid URL */
     }
   }
 
-  if (!env.DISABLE_IMPLICIT_PROTOCOL && /^\/\/[^/]/.test(normalized)) {
-    const rest = normalized.slice(2)
-    const { host, pathname } = extractHostPath(rest.split('?')[0])
+  if (!env.DISABLE_SEGMENTED_PROTOCOL && (prefix === 'https' || prefix === 'http'))
+    return { protocol: prefix, ...parseHostPath(rest) }
+
+  if (!env.DISABLE_SHORTHAND_PROTOCOL && (prefix === '~' || prefix === '-'))
+    return { protocol: prefix === '~' ? 'https' : 'http', ...parseHostPath(rest) }
+
+  if (!env.DISABLE_IMPLICIT_PROTOCOL) {
+    if (prefix === '') return { protocol: defaultProtocol, ...parseHostPath(rest) }
+    if (prefix.startsWith('[') || prefix.includes('.') || prefix.indexOf(':') !== prefix.lastIndexOf(':'))
+      return { protocol: defaultProtocol, ...parseHostPath(input) }
+  }
+
+  if (!env.DISABLE_FALLBACK_PROXY && !skipFallback)
     return {
       protocol: defaultProtocol,
-      host,
-      pathname,
-      search: rest.indexOf('?') === -1 ? '' : rest.slice(rest.indexOf('?'))
+      host: fallbackHost,
+      pathname: '/' + input,
+      search: ''
     }
-  }
-
-  const searchIdx = normalized.indexOf('?')
-  const search = searchIdx === -1 ? '' : normalized.slice(searchIdx)
-  const pathPart = searchIdx === -1 ? normalized : normalized.slice(0, searchIdx)
-
-  if (!env.DISABLE_SEGMENTED_PROTOCOL) {
-    const match = pathPart.match(/^(https?)\/(.+)/i)
-    if (match) {
-      const { host, pathname } = extractHostPath(match[2])
-      return { protocol: match[1].toLowerCase(), host, pathname, search }
-    }
-  }
-
-  if (!env.DISABLE_SLASH_SHORTHAND) {
-    const match = pathPart.match(/^([~-])\/(.+)/)
-    if (match) {
-      const { host, pathname } = extractHostPath(match[2])
-      return { protocol: match[1] === '~' ? 'https' : 'http', host, pathname, search }
-    }
-  }
-
-  if (!env.DISABLE_COMPACT_SHORTHAND) {
-    const match = pathPart.match(/^([~-])(.+)/)
-    if (match) {
-      const { host, pathname } = extractHostPath(match[2])
-      return { protocol: match[1] === '~' ? 'https' : 'http', host, pathname, search }
-    }
-  }
-
-  const slashIdx = pathPart.indexOf('/')
-  const firstSeg = slashIdx === -1 ? pathPart : pathPart.slice(0, slashIdx)
-  const isHost =
-    firstSeg.startsWith('[') ||
-    firstSeg.includes('.') ||
-    (firstSeg.indexOf(':') !== -1 && firstSeg.indexOf(':', firstSeg.indexOf(':') + 1) !== -1)
-  if (!env.DISABLE_IMPLICIT_PROTOCOL && isHost) {
-    return {
-      protocol: defaultProtocol,
-      host: firstSeg,
-      pathname: slashIdx === -1 ? '/' : pathPart.slice(slashIdx) || '/',
-      search
-    }
-  }
-
-  if (!env.DISABLE_FALLBACK_PROXY && !skipFallback) {
-    return {
-      protocol: defaultProtocol,
-      host: (env.FALLBACK_HOST as string) || 'i.pximg.net',
-      pathname: pathPart.startsWith('/') ? pathPart : '/' + pathPart,
-      search
-    }
-  }
   return null
 }
 
 export default new Hono<{ Bindings: Env }>()
   .use('*', async (c, next) => {
-    if (!c.env.DISABLE_LOGGER) return logger()(c, next)
+    if (!c.env.DISABLE_LOGGER_OUTPUT) return logger()(c, next)
     await next()
   })
   .use('*', secureHeaders({ crossOriginResourcePolicy: 'cross-origin' }))
-  .use('*', (c, next) =>
+  .use(
+    '*',
     cors({
-      origin: (origin) =>
-        !origin
-          ? '*'
-          : isAllowed(origin, c.env.ALLOWED_ORIGINS as string, c.env.BLOCKED_ORIGINS as string)
-            ? origin
-            : ''
-    })(c, next)
+      origin: (origin, c) => {
+        if (!origin) return '*'
+        return isAllowed(origin, c.env.ALLOWED_ORIGINS_LIST, c.env.BLOCKED_ORIGINS_LIST) ? origin : ''
+      }
+    })
   )
   .onError((_, c) => c.text('Internal Server Error', 500))
-  .all('*', (c) => {
+  .all('*', async (c) => {
     const { env } = c
-    const { hostname, pathname, search, searchParams } = new URL(c.req.url)
-    const deployDomain = (env.DEPLOY_DOMAIN as string).toLowerCase()
+    const requestUrl = new URL(c.req.url)
+    const { hostname, pathname, searchParams } = requestUrl
+    const deployDomain = env.PROXY_DEPLOY_DOMAIN.toLowerCase()
+    const subdomainBase = (env.SUBDOMAIN_PROXY_ROOT || deployDomain).toLowerCase()
+    const defaultProtocol = env.PREFER_HTTP_PROTOCOL ? 'http' : 'https'
+    const fallbackHost = env.FALLBACK_PROXY_HOST || 'i.pximg.net'
+    const proxy = async (target: string | ParsedTarget, skipFallback = false): Promise<Response | null> => {
+      const parsed =
+        typeof target === 'string'
+          ? parseTarget(target, env, defaultProtocol, fallbackHost, skipFallback)
+          : target
+      if (!parsed) return null
+      if (
+        deployDomain &&
+        (parsed.host.toLowerCase() === deployDomain ||
+          parsed.host.toLowerCase() === subdomainBase ||
+          parsed.host.toLowerCase().endsWith('.' + subdomainBase))
+      )
+        return null
+      if (
+        !isAllowed(c.req.header('CF-Connecting-IP') || '', env.ALLOWED_IPS_LIST, env.BLOCKED_IPS_LIST) ||
+        !isAllowed(parsed.host, env.ALLOWED_HOSTS_LIST, env.BLOCKED_HOSTS_LIST)
+      )
+        return c.text('Forbidden', 403)
+      if (!isAllowed(c.req.method, env.ALLOWED_METHODS_LIST, env.BLOCKED_METHODS_LIST))
+        return c.text('Method Not Allowed', 405)
+
+      const reqHeaders = new Headers(c.req.raw.headers)
+      reqHeaders.delete('Host')
+      if (!env.DISABLE_REFERER_SPOOF) reqHeaders.set('Referer', `${parsed.protocol}://${parsed.host}/`)
+      applyHeaders(reqHeaders, env.REQUEST_HEADERS_RULES)
+
+      const res = await fetch(
+        Object.assign(new URL(requestUrl), {
+          protocol: parsed.protocol,
+          host: parsed.host,
+          pathname: parsed.pathname,
+          search: parsed.search
+        }),
+        {
+          method: c.req.method,
+          headers: reqHeaders,
+          body: c.req.raw.body,
+          redirect: env.DISABLE_REDIRECT_FOLLOW ? 'manual' : 'follow'
+        }
+      )
+
+      const resHeaders = new Headers(res.headers)
+      applyHeaders(resHeaders, env.RESPONSE_HEADERS_RULES)
+
+      return c.newResponse(res.body, { status: res.status as StatusCode, headers: resHeaders })
+    }
+
     if (!env.DISABLE_SUBDOMAIN_PROXY && deployDomain && hostname.toLowerCase() !== deployDomain) {
-      const suffix = '.' + ((env.SUBDOMAIN_BASE as string).toLowerCase() || deployDomain)
+      const suffix = '.' + subdomainBase
       if (hostname.toLowerCase().endsWith(suffix)) {
         const subdomain = hostname.slice(0, -suffix.length)
-        const separator = (env.SUBDOMAIN_SEPARATOR as string) || '.'
-        const targetHost = separator === '.' ? subdomain : subdomain.split(separator).join('.')
-        if (!isLoopTarget(targetHost, env)) {
-          return proxy(c, env, env.DEFAULT_HTTP ? 'http' : 'https', targetHost, pathname, search)
-        }
+        const separator = env.SUBDOMAIN_PROXY_SEPARATOR || '.'
+        const result = await proxy({
+          protocol: defaultProtocol,
+          host: separator === '.' ? subdomain : subdomain.split(separator).join('.'),
+          pathname,
+          search: requestUrl.search
+        })
+        if (result) return result
       }
     }
 
     if (!env.DISABLE_PATH_PROXY) {
-      const match = pathname.match(/^\/([~-][^/]*|https?)\/(.*)$/i)
+      const match = pathname.match(/^\/([~-][^/]*|https?:?)\/*(.*)$/i)
       if (match) {
-        const parsed = parseTarget(`${match[1]}/${match[2]}`, env, true)
-        if (parsed && !isLoopTarget(parsed.host, env))
-          return proxy(c, env, parsed.protocol, parsed.host, parsed.pathname)
+        const result = await proxy(`${match[1]}/${match[2]}`, true)
+        if (result) return result
       }
     }
 
-    if (pathname.length > 1) {
-      const parsed = parseTarget(pathname.slice(1), env)
-      if (parsed && !isLoopTarget(parsed.host, env))
-        return proxy(c, env, parsed.protocol, parsed.host, parsed.pathname)
+    if (pathname !== '/') {
+      const result = await proxy(pathname.slice(1))
+      if (result) return result
     }
 
     if (!env.DISABLE_PARAM_PROXY) {
-      const targetUrl = searchParams.get(env.PARAM_NAME)
+      const targetUrl = searchParams.get(env.PARAM_PROXY_NAME)
       if (targetUrl) {
-        let target = targetUrl
+        let target = targetUrl.replace(/^\/+/, '')
         if (!env.DISABLE_PARAM_MERGE) {
-          searchParams.delete(env.PARAM_NAME)
+          searchParams.delete(env.PARAM_PROXY_NAME)
           const rest = searchParams.toString()
           if (rest) target += (targetUrl.includes('?') ? '&' : '?') + rest
         }
-        const parsed = parseTarget(target, env)
-        if (parsed && !isLoopTarget(parsed.host, env))
-          return proxy(c, env, parsed.protocol, parsed.host, parsed.pathname, parsed.search)
+        const result = await proxy(target)
+        if (result) return result
       }
     }
 
     if (pathname === '/') {
-      const target = (env.ROOT_PAGE as string) || (env.FALLBACK_HOST as string) || 'i.pximg.net'
-      const parsed = parseTarget(target, env, true)
-      if (parsed) return proxy(c, env, parsed.protocol, parsed.host, parsed.pathname, parsed.search)
+      const result = await proxy(env.ROOT_PAGE_URL || fallbackHost, true)
+      if (result) return result
     }
 
-    if (env.ERROR_PAGE) {
-      const parsed = parseTarget(env.ERROR_PAGE as string, env, true)
-      if (parsed) return proxy(c, env, parsed.protocol, parsed.host, parsed.pathname, parsed.search)
+    if (env.ERROR_PAGE_URL) {
+      const result = await proxy(env.ERROR_PAGE_URL, true)
+      if (result) return result
     }
     return c.text('Not Found', 404)
   })
