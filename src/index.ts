@@ -103,14 +103,10 @@ const parseTarget = (
   skipFallback = false
 ): ParsedTarget | null => {
   let input = target.trim()
+  input = input.replace(/^(https?:|[~-])(?!\/)/i, '$1/')
+  if (!input.includes('/')) input = '/' + input
 
-  let slashIndex = input.indexOf('/')
-  if (slashIndex === -1) {
-    if (/^(https?:|[~-])/i.test(input)) input = input.replace(/^(https?:|[~-])/i, '$1/')
-    else input = '/' + input
-    slashIndex = input.indexOf('/')
-  }
-
+  const slashIndex = input.indexOf('/')
   const prefix = input.slice(0, slashIndex).toLowerCase()
   const rest = input.slice(slashIndex + 1).replace(/^\/+/, '')
 
