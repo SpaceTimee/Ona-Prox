@@ -4,104 +4,117 @@ import { logger } from 'hono/logger'
 import { secureHeaders } from 'hono/secure-headers'
 import type { StatusCode } from 'hono/utils/http-status'
 
-type ParsedTarget = { protocol: string; host: string; pathname: string; search: string }
+type ProxyTarget = { protocol: string; host: string; pathname: string; search: string }
+type AccessRule = { exact?: string; regex?: RegExp }
+type HeaderRule = { name: string; value?: string }
 
-const WILDCARD_ESCAPES = ['\uE000', '\uE001', '\uE002', '\uE003']
-const HEADER_ESCAPES = ['\uE000', '\uE001']
-
-const isAllowed = (value: string, allowedList: string, blockedList: string): boolean => {
-  const toRules = (list: string) =>
-    list
-      .split(',')
-      .map((rule) => rule.trim())
+const parseAccessRules = (() => {
+  const cache = new Map<string, AccessRule[]>()
+  const escapes = ['\uE000', '\uE001', '\uE002', '\uE003']
+  return (rules: string) => {
+    const cached = cache.get(rules)
+    if (cached) return cached
+    const parsed = rules
+      .trim()
+      .split(/\s*,\s*/)
       .filter(Boolean)
-  const matches = (pattern: string): boolean => {
-    const escaped = pattern
-      .split('\\\\')
-      .join(WILDCARD_ESCAPES[0])
-      .split('\\*')
-      .join(WILDCARD_ESCAPES[1])
-      .split('\\+')
-      .join(WILDCARD_ESCAPES[2])
-      .split('\\?')
-      .join(WILDCARD_ESCAPES[3])
-    if (!/[*+?]/.test(escaped)) {
-      const normalized = escaped
-        .split(WILDCARD_ESCAPES[0])
-        .join('\\')
-        .split(WILDCARD_ESCAPES[1])
-        .join('*')
-        .split(WILDCARD_ESCAPES[2])
-        .join('+')
-        .split(WILDCARD_ESCAPES[3])
-        .join('?')
-        .toLowerCase()
-      return value.toLowerCase() === normalized
-    }
-    const regex = escaped
-      .replace(/[.^${}()|[\]\\]/g, '\\$&')
-      .split('*')
-      .join('.*')
-      .split('+')
-      .join('.+')
-      .split('?')
-      .join('.')
-      .split(WILDCARD_ESCAPES[0])
-      .join('\\\\')
-      .split(WILDCARD_ESCAPES[1])
-      .join('\\*')
-      .split(WILDCARD_ESCAPES[2])
-      .join('\\+')
-      .split(WILDCARD_ESCAPES[3])
-      .join('\\?')
-    return new RegExp(`^${regex}$`, 'i').test(value)
+      .map(pattern => {
+        const escaped = pattern
+          .replaceAll('\\\\', escapes[0])
+          .replaceAll('\\*', escapes[1])
+          .replaceAll('\\+', escapes[2])
+          .replaceAll('\\?', escapes[3])
+        if (!/[*+?]/.test(escaped)) {
+          return {
+            exact: escaped
+              .replaceAll(escapes[0], '\\')
+              .replaceAll(escapes[1], '*')
+              .replaceAll(escapes[2], '+')
+              .replaceAll(escapes[3], '?')
+              .toLowerCase()
+          }
+        }
+        const regexSource = escaped
+          .replace(/[.^${}()|[\]\\]/g, '\\$&')
+          .replaceAll('*', '.*')
+          .replaceAll('+', '.+')
+          .replaceAll('?', '.')
+          .replaceAll(escapes[0], '\\\\')
+          .replaceAll(escapes[1], '\\*')
+          .replaceAll(escapes[2], '\\+')
+          .replaceAll(escapes[3], '\\?')
+        return { regex: new RegExp(`^${regexSource}$`, 'i') }
+      })
+    cache.set(rules, parsed)
+    return parsed
   }
-  const allowed = allowedList ? toRules(allowedList) : []
-  const blocked = blockedList ? toRules(blockedList) : []
-  if (allowed.length === 0 && blocked.length === 0) return true
-  return (allowed.length === 0 || allowed.some(matches)) && !blocked.some(matches)
+})()
+
+const checkAccess = (subject: string, allowed: string, blocked: string): boolean => {
+  if (!allowed && !blocked) return true
+  const matches = (rule: AccessRule) =>
+    rule.exact ? subject.toLowerCase() === rule.exact : rule.regex?.test(subject)
+  if (allowed && !parseAccessRules(allowed).some(matches)) return false
+  return !blocked || !parseAccessRules(blocked).some(matches)
 }
 
-const applyHeaders = (headers: Headers, rules: string) => {
-  if (!rules || !rules.trim()) return
-  for (const entry of rules
-    .split('\\\\')
-    .join(HEADER_ESCAPES[0])
-    .split('\\,')
-    .join(HEADER_ESCAPES[1])
-    .split(',')
-    .map((s) => s.split(HEADER_ESCAPES[0]).join('\\\\').split(HEADER_ESCAPES[1]).join(',').trim())
-    .filter(Boolean)) {
-    if (entry.startsWith('-')) {
-      headers.delete(entry.slice(1).trim())
-      continue
+const applyHeaderRules = (() => {
+  const cache = new Map<string, HeaderRule[]>()
+  const escapes = ['\uE000', '\uE001']
+  return (headers: Headers, rules: string) => {
+    rules = rules?.trim()
+    if (!rules) return
+    const cached = cache.get(rules)
+    if (cached) {
+      for (const rule of cached) {
+        if (rule.value === undefined) headers.delete(rule.name)
+        else headers.set(rule.name, rule.value)
+      }
+      return
     }
-    const colonIndex = entry.indexOf(':')
-    headers.set(
-      colonIndex === -1 ? entry : entry.slice(0, colonIndex).trim(),
-      (colonIndex === -1 ? '' : entry.slice(colonIndex + 1).trim()).split('\\\\').join('\\')
-    )
+    const parsed: HeaderRule[] = []
+    for (let entry of rules
+      .replaceAll('\\\\', escapes[0])
+      .replaceAll('\\,', escapes[1])
+      .split(/\s*,\s*/)
+      .filter(Boolean)) {
+      entry = entry.replaceAll(escapes[0], '\\\\').replaceAll(escapes[1], ',')
+      if (entry.startsWith('-')) {
+        parsed.push({ name: entry.slice(1).trim() })
+        continue
+      }
+      const colonIndex = entry.indexOf(':')
+      if (colonIndex === -1) continue
+      const name = entry.slice(0, colonIndex).trim()
+      const value = entry.slice(colonIndex + 1).trim().replaceAll('\\\\', '\\')
+      parsed.push({ name, value })
+    }
+    cache.set(rules, parsed)
+    for (const rule of parsed) {
+      if (rule.value === undefined) headers.delete(rule.name)
+      else headers.set(rule.name, rule.value)
+    }
   }
-}
+})()
 
-const parseHostPath = (value: string) => {
-  const queryIndex = value.indexOf('?')
-  const path = queryIndex === -1 ? value : value.slice(0, queryIndex)
+const parseUrlPath = (url: string) => {
+  const queryIndex = url.indexOf('?')
+  const path = queryIndex === -1 ? url : url.slice(0, queryIndex)
   const slashIndex = path.indexOf('/')
   return {
-    host: slashIndex === -1 ? path : path.slice(0, slashIndex),
-    pathname: slashIndex === -1 ? '/' : path.slice(slashIndex) || '/',
-    search: queryIndex === -1 ? '' : value.slice(queryIndex)
+    host: (slashIndex === -1 ? path : path.slice(0, slashIndex)).toLowerCase(),
+    pathname: slashIndex === -1 ? '/' : path.slice(slashIndex),
+    search: queryIndex === -1 ? '' : url.slice(queryIndex)
   }
 }
 
-const parseTarget = (
+const parseProxyTarget = (
   target: string,
   env: Env,
   defaultProtocol: 'http' | 'https',
   fallbackHost: string,
   skipFallback = false
-): ParsedTarget | null => {
+): ProxyTarget | null => {
   let input = target.trim()
   input = input.replace(/^(https?:|[~-])(?!\/)/i, '$1/')
   if (!input.includes('/')) input = '/' + input
@@ -125,15 +138,15 @@ const parseTarget = (
   }
 
   if (!env.DISABLE_SEGMENTED_PROTOCOL && (prefix === 'https' || prefix === 'http'))
-    return { protocol: prefix, ...parseHostPath(rest) }
+    return { protocol: prefix, ...parseUrlPath(rest) }
 
   if (!env.DISABLE_SHORTHAND_PROTOCOL && (prefix === '~' || prefix === '-'))
-    return { protocol: prefix === '~' ? 'https' : 'http', ...parseHostPath(rest) }
+    return { protocol: prefix === '~' ? 'https' : 'http', ...parseUrlPath(rest) }
 
   if (!env.DISABLE_IMPLICIT_PROTOCOL) {
-    if (prefix === '') return { protocol: defaultProtocol, ...parseHostPath(rest) }
+    if (prefix === '') return { protocol: defaultProtocol, ...parseUrlPath(rest) }
     if (prefix.startsWith('[') || prefix.includes('.') || prefix.indexOf(':') !== prefix.lastIndexOf(':'))
-      return { protocol: defaultProtocol, ...parseHostPath(input) }
+      return { protocol: defaultProtocol, ...parseUrlPath(input) }
   }
 
   if (!env.DISABLE_FALLBACK_PROXY && !skipFallback)
@@ -152,74 +165,60 @@ export default new Hono<{ Bindings: Env }>()
     await next()
   })
   .use('*', secureHeaders({ crossOriginResourcePolicy: 'cross-origin' }))
-  .use(
-    '*',
-    cors({
-      origin: (origin, c) => {
-        if (!origin) return '*'
-        return isAllowed(origin, c.env.ALLOWED_ORIGINS_LIST, c.env.BLOCKED_ORIGINS_LIST) ? origin : ''
-      }
-    })
-  )
+  .use('*', cors({
+    origin: (origin, c) => !origin ? '*' : checkAccess(origin, c.env.ALLOWED_ORIGINS_LIST, c.env.BLOCKED_ORIGINS_LIST) ? origin : ''
+  }))
   .onError((_, c) => c.text('Internal Server Error', 500))
   .all('*', async (c) => {
     const { env } = c
     const requestUrl = new URL(c.req.url)
     const { hostname, pathname, searchParams } = requestUrl
-    const deployDomain = env.PROXY_DEPLOY_DOMAIN.toLowerCase()
-    const subdomainBase = (env.SUBDOMAIN_PROXY_ROOT || deployDomain).toLowerCase()
+    const deployDomain = env.PROXY_DEPLOY_DOMAIN?.toLowerCase() || ''
+    const subdomainBase = env.SUBDOMAIN_PROXY_ROOT?.toLowerCase() || deployDomain
     const defaultProtocol = env.PREFER_HTTP_PROTOCOL ? 'http' : 'https'
     const fallbackHost = env.FALLBACK_PROXY_HOST || 'i.pximg.net'
-    const proxy = async (target: string | ParsedTarget, skipFallback = false): Promise<Response | null> => {
+
+    const proxy = async (target: string | ProxyTarget, skipFallback = false): Promise<Response | null> => {
       const parsed =
         typeof target === 'string'
-          ? parseTarget(target, env, defaultProtocol, fallbackHost, skipFallback)
+          ? parseProxyTarget(target, env, defaultProtocol, fallbackHost, skipFallback)
           : target
       if (!parsed) return null
+
+      if (deployDomain) {
+        if (parsed.host === deployDomain || parsed.host === subdomainBase || parsed.host.endsWith('.' + subdomainBase))
+          return null
+      }
+
       if (
-        deployDomain &&
-        (parsed.host.toLowerCase() === deployDomain ||
-          parsed.host.toLowerCase() === subdomainBase ||
-          parsed.host.toLowerCase().endsWith('.' + subdomainBase))
-      )
-        return null
-      if (
-        !isAllowed(c.req.header('CF-Connecting-IP') || '', env.ALLOWED_IPS_LIST, env.BLOCKED_IPS_LIST) ||
-        !isAllowed(parsed.host, env.ALLOWED_HOSTS_LIST, env.BLOCKED_HOSTS_LIST)
+        !checkAccess(c.req.header('CF-Connecting-IP') || '', env.ALLOWED_IPS_LIST, env.BLOCKED_IPS_LIST) ||
+        !checkAccess(parsed.host, env.ALLOWED_HOSTS_LIST, env.BLOCKED_HOSTS_LIST)
       )
         return c.text('Forbidden', 403)
-      if (!isAllowed(c.req.method, env.ALLOWED_METHODS_LIST, env.BLOCKED_METHODS_LIST))
+      if (!checkAccess(c.req.method, env.ALLOWED_METHODS_LIST, env.BLOCKED_METHODS_LIST))
         return c.text('Method Not Allowed', 405)
 
       const reqHeaders = new Headers(c.req.raw.headers)
       reqHeaders.delete('Host')
       if (!env.DISABLE_REFERER_SPOOF) reqHeaders.set('Referer', `${parsed.protocol}://${parsed.host}/`)
-      applyHeaders(reqHeaders, env.REQUEST_HEADERS_RULES)
+      applyHeaderRules(reqHeaders, env.REQUEST_HEADERS_RULES)
 
-      const res = await fetch(
-        Object.assign(new URL(requestUrl), {
-          protocol: parsed.protocol,
-          host: parsed.host,
-          pathname: parsed.pathname,
-          search: parsed.search
-        }),
-        {
-          method: c.req.method,
-          headers: reqHeaders,
-          body: c.req.raw.body,
-          redirect: env.DISABLE_REDIRECT_FOLLOW ? 'manual' : 'follow'
-        }
-      )
+      const res = await fetch(`${parsed.protocol}://${parsed.host}${parsed.pathname}${parsed.search}`, {
+        method: c.req.method,
+        headers: reqHeaders,
+        body: c.req.raw.body,
+        redirect: env.DISABLE_REDIRECT_FOLLOW ? 'manual' : 'follow'
+      })
 
       const resHeaders = new Headers(res.headers)
-      applyHeaders(resHeaders, env.RESPONSE_HEADERS_RULES)
+      applyHeaderRules(resHeaders, env.RESPONSE_HEADERS_RULES)
 
       return c.newResponse(res.body, { status: res.status as StatusCode, headers: resHeaders })
     }
 
-    if (!env.DISABLE_SUBDOMAIN_PROXY && deployDomain && hostname.toLowerCase() !== deployDomain) {
+    if (!env.DISABLE_SUBDOMAIN_PROXY && deployDomain && hostname !== deployDomain) {
       const suffix = '.' + subdomainBase
-      if (hostname.toLowerCase().endsWith(suffix)) {
+      if (hostname.endsWith(suffix)) {
         const subdomain = hostname.slice(0, -suffix.length)
         const separator = env.SUBDOMAIN_PROXY_SEPARATOR || '.'
         const result = await proxy({
@@ -246,11 +245,12 @@ export default new Hono<{ Bindings: Env }>()
     }
 
     if (!env.DISABLE_PARAM_PROXY) {
-      const targetUrl = searchParams.get(env.PARAM_PROXY_NAME)
+      const paramName = env.PARAM_PROXY_NAME ?? ''
+      const targetUrl = searchParams.get(paramName)
       if (targetUrl) {
         let target = targetUrl.replace(/^\/+/, '')
         if (!env.DISABLE_PARAM_MERGE) {
-          searchParams.delete(env.PARAM_PROXY_NAME)
+          searchParams.delete(paramName)
           const rest = searchParams.toString()
           if (rest) target += (targetUrl.includes('?') ? '&' : '?') + rest
         }
