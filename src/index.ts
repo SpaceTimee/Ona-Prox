@@ -18,7 +18,7 @@ const parseAccessRules = (() => {
       .trim()
       .split(/\s*,\s*/)
       .filter(Boolean)
-      .map(pattern => {
+      .map((pattern) => {
         const escaped = pattern
           .replaceAll('\\\\', escapes[0])
           .replaceAll('\\*', escapes[1])
@@ -86,7 +86,10 @@ const applyHeaderRules = (() => {
       const colonIndex = entry.indexOf(':')
       if (colonIndex === -1) continue
       const name = entry.slice(0, colonIndex).trim()
-      const value = entry.slice(colonIndex + 1).trim().replaceAll('\\\\', '\\')
+      const value = entry
+        .slice(colonIndex + 1)
+        .trim()
+        .replaceAll('\\\\', '\\')
       parsed.push({ name, value })
     }
     cache.set(rules, parsed)
@@ -165,9 +168,17 @@ export default new Hono<{ Bindings: Env }>()
     await next()
   })
   .use('*', secureHeaders({ crossOriginResourcePolicy: 'cross-origin' }))
-  .use('*', cors({
-    origin: (origin, c) => !origin ? '*' : checkAccess(origin, c.env.ALLOWED_ORIGINS_LIST, c.env.BLOCKED_ORIGINS_LIST) ? origin : ''
-  }))
+  .use(
+    '*',
+    cors({
+      origin: (origin, c) =>
+        !origin
+          ? '*'
+          : checkAccess(origin, c.env.ALLOWED_ORIGINS_LIST, c.env.BLOCKED_ORIGINS_LIST)
+            ? origin
+            : ''
+    })
+  )
   .onError((_, c) => c.text('Internal Server Error', 500))
   .all('*', async (c) => {
     const { env } = c
@@ -186,7 +197,11 @@ export default new Hono<{ Bindings: Env }>()
       if (!parsed) return null
 
       if (deployDomain) {
-        if (parsed.host === deployDomain || parsed.host === subdomainBase || parsed.host.endsWith('.' + subdomainBase))
+        if (
+          parsed.host === deployDomain ||
+          parsed.host === subdomainBase ||
+          parsed.host.endsWith('.' + subdomainBase)
+        )
           return null
       }
 
