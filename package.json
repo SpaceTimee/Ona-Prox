@@ -11,7 +11,7 @@
     "format": "prettier --write ."
   },
   "dependencies": {
-    "hono": "^4.11.3"
+    "hono": "^4.11.4"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.11.1",
