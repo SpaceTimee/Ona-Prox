@@ -257,13 +257,13 @@ export default new Hono<{ Bindings: Env }>()
     if (!env.DISABLE_PATH_PROXY) {
       const pathMatch = pathname.match(/^\/([~-][^/]*|https?:?)\/*(.*)$/i)
       if (pathMatch) {
-        const response = await proxy(`${pathMatch[1]}/${pathMatch[2]}`, true)
+        const response = await proxy(`${pathMatch[1]}/${pathMatch[2]}${search}`, true)
         if (response) return response
       }
     }
 
     if (pathname !== '/') {
-      const response = await proxy(pathname.slice(1))
+      const response = await proxy(`${pathname.slice(1)}${search}`)
       if (response) return response
     }
 
@@ -282,7 +282,7 @@ export default new Hono<{ Bindings: Env }>()
     }
 
     if (pathname === '/') {
-      const response = await proxy(env.ROOT_PAGE_URL || fallbackHost, true)
+      const response = await proxy(`${env.ROOT_PAGE_URL || fallbackHost}${search}`, true)
       if (response) return response
     }
 
